@@ -1,0 +1,14 @@
+{
+  "name": "emisify",
+  "private": true,
+  "version": "1.0.0",
+  "scripts": {
+    "install:all": "cd server && yarn install && cd ../client && yarn install",
+    "db:setup": "cd server && yarn prisma:deploy && yarn seed",
+    "dev": "concurrently -n server,client -c green,yellow \"cd server && yarn dev\" \"cd client && yarn dev\"",
+    "build": "cd client && yarn build"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.0"
+  }
+}

@@ -1,0 +1,214 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum ActivityType {
+  TRANSPORT
+  ELECTRICITY
+  AC
+  ELECTRONICS
+}
+
+enum ImpactCategory {
+  VEHICLE
+  ENERGY
+  ELECTRONICS
+}
+
+enum FactorStatus {
+  DEMO
+  ESTIMATE
+  VALIDATED
+}
+
+enum UserRecommendationStatus {
+  SAVED
+  IN_PROGRESS
+  DONE
+}
+
+enum UserChallengeStatus {
+  JOINED
+  COMPLETED
+}
+
+enum AchievementRule {
+  CALCULATIONS_COUNT
+  ACTIONS_COMPLETED
+  REDUCTION_KG
+  CHALLENGES_COMPLETED
+}
+
+model User {
+  id                  String               @id @default(cuid())
+  name                String
+  email               String               @unique
+  age                 Int?
+  passwordHash        String?
+  googleId            String?              @unique
+  monthlyTargetKg     Float?
+  tokenVersion        Int                  @default(0)
+  createdAt           DateTime             @default(now())
+  updatedAt           DateTime             @updatedAt
+  calculations        Calculation[]
+  userRecommendations UserRecommendation[]
+  userChallenges      UserChallenge[]
+  achievements        UserAchievement[]
+  aiMessages          AiMessage[]
+  resetTokens         PasswordResetToken[]
+}
+
+model PasswordResetToken {
+  id        String    @id @default(cuid())
+  userId    String
+  tokenHash String    @unique
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+model EmissionFactor {
+  id           String        @id @default(cuid())
+  key          String        @unique
+  activityType ActivityType
+  name         Json
+  inputUnit    String
+  outputUnit   String        @default("kg CO2e")
+  value        Float
+  source       String
+  year         Int?
+  status       FactorStatus  @default(DEMO)
+  notes        String?
+  calculations Calculation[]
+  updatedAt    DateTime      @updatedAt
+}
+
+model Calculation {
+  id             String          @id @default(cuid())
+  userId         String
+  user           User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  activityType   ActivityType
+  impactCategory ImpactCategory
+  subType        String
+  itemName       Json
+  inputs         Json
+  quantity       Float
+  unit           String
+  factorId       String?
+  factor         EmissionFactor? @relation(fields: [factorId], references: [id], onDelete: SetNull)
+  factorKey      String
+  factorValue    Float
+  factorUnit     String
+  factorStatus   FactorStatus
+  breakdown      Json
+  periodDays     Int
+  resultKg       Float
+  activityDate   DateTime
+  createdAt      DateTime        @default(now())
+  updatedAt      DateTime        @updatedAt
+
+  @@index([userId, activityDate])
+  @@index([userId, activityType])
+}
+
+model Recommendation {
+  id                  String               @id @default(cuid())
+  slug                String               @unique
+  activityType        ActivityType
+  content             Json
+  reductionKgPerMonth Float
+  image               String?
+  icon                String
+  sortOrder           Int                  @default(0)
+  userRecommendations UserRecommendation[]
+  aiMessages          AiMessage[]
+}
+
+model UserRecommendation {
+  id               String                   @id @default(cuid())
+  userId           String
+  recommendationId String
+  status           UserRecommendationStatus
+  startedAt        DateTime?
+  completedAt      DateTime?
+  updatedAt        DateTime                 @updatedAt
+  user             User                     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  recommendation   Recommendation           @relation(fields: [recommendationId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, recommendationId])
+}
+
+model GreenChallenge {
+  id                   String          @id @default(cuid())
+  slug                 String          @unique
+  activityType         ActivityType
+  content              Json
+  target               Int
+  periodDays           Int
+  rewardPoints         Int
+  reductionKgPerCheckin Float
+  icon                 String
+  active               Boolean         @default(true)
+  sortOrder            Int             @default(0)
+  userChallenges       UserChallenge[]
+}
+
+model UserChallenge {
+  id            String              @id @default(cuid())
+  userId        String
+  challengeId   String
+  progress      Int                 @default(0)
+  status        UserChallengeStatus @default(JOINED)
+  joinedAt      DateTime            @default(now())
+  lastCheckinAt DateTime?
+  completedAt   DateTime?
+  user          User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+  challenge     GreenChallenge      @relation(fields: [challengeId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, challengeId])
+}
+
+model Achievement {
+  id        String            @id @default(cuid())
+  slug      String            @unique
+  content   Json
+  rule      AchievementRule
+  threshold Float
+  image     String?
+  icon      String
+  sortOrder Int               @default(0)
+  users     UserAchievement[]
+}
+
+model UserAchievement {
+  id            String      @id @default(cuid())
+  userId        String
+  achievementId String
+  earnedAt      DateTime    @default(now())
+  user          User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  achievement   Achievement @relation(fields: [achievementId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, achievementId])
+}
+
+model AiMessage {
+  id               String          @id @default(cuid())
+  userId           String
+  recommendationId String?
+  role             String
+  content          String
+  mode             String
+  createdAt        DateTime        @default(now())
+  user             User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  recommendation   Recommendation? @relation(fields: [recommendationId], references: [id], onDelete: Cascade)
+
+  @@index([userId, recommendationId, createdAt])
+}
