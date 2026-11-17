@@ -1,7 +1,7 @@
 const { Router } = require('express');
 const { asyncHandler: h } = require('../utils/http');
 const { requireAuth } = require('../middleware/auth');
-const { loginLimiter, registerLimiter, aiLimiter, resetLimiter } = require('../middleware/security');
+const { loginLimiter, registerLimiter, aiLimiter, resetLimiter, accountLimiter } = require('../middleware/security');
 const auth = require('../controllers/auth.controller');
 const em = require('../controllers/emission.controller');
 const act = require('../controllers/action.controller');
@@ -28,6 +28,9 @@ r.get('/activities/categories', h(em.categories));
 r.use(requireAuth);
 
 r.patch('/user/target', h(auth.setTarget));
+r.patch('/user/profile', h(auth.updateProfile));
+r.patch('/user/password', accountLimiter, h(auth.changePassword));
+r.delete('/user', accountLimiter, h(auth.deleteAccount));
 r.get('/dashboard/summary', h(em.summary));
 r.get('/impact', h(em.impact));
 r.get('/impact/:slug', h(em.impactDetail));

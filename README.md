@@ -106,6 +106,7 @@ Client: `VITE_API_URL` (kosong = same-origin `/api`), `VITE_PROXY_TARGET` (proxy
 | `/ask-ai` | Tanya AI (umum) | login |
 | `/challenges` | Tantangan Hijau | login |
 | `/progress` | Progress & Reward (tab Progress Aksi / Reward Saya) | login |
+| `/profile` | Profil & Akun (edit data diri, ganti/buat password, hapus akun) | login |
 | `/forgot-password` | Lupa Password (kirim tautan ke email terdaftar) | tamu |
 | `/reset-password?token=` | Atur Password Baru | publik (token) |
 | `/auth/google` | Callback Login Google | publik |
@@ -124,6 +125,9 @@ Client: `VITE_API_URL` (kosong = same-origin `/api`), `VITE_PROXY_TARGET` (proxy
 | POST | `/auth/forgot-password` · `/auth/reset-password` | Kirim tautan reset (respons selalu generik) · set password baru |
 | GET | `/auth/reset-password/check?token=` | Validasi token reset |
 | PATCH | `/user/target` | `{monthlyTargetKg: number 1–100000 | null}` |
+| PATCH | `/user/profile` | `{name, age: number 10–100 | null}` (email tidak bisa diubah) |
+| PATCH | `/user/password` | `{currentPassword?, newPassword}` — `currentPassword` wajib bila akun sudah punya password (akun Google bisa membuat password). Sesi lain dicabut, sesi ini diperbarui. Rate limit 10/15 mnt per user |
+| DELETE | `/user` | `{password}` atau `{confirmEmail}` (akun Google tanpa password) — hapus akun + semua data (cascade), cookie dihapus. Rate limit 10/15 mnt per user |
 | GET | `/calculations/export?format=csv|pdf&lang=&category=&range=&sort=` | Unduh riwayat (CSV UTF-8 / PDF A4) |
 | GET | `/activities/categories` | Definisi aktivitas, kategori & field form dinamis |
 | GET | `/dashboard/summary` | Total bulan ini vs lalu, per aktivitas, tren 6 bulan & 14 hari |
@@ -212,7 +216,7 @@ Audit: 17 halaman/varian + 4 style/komponen + 8 aset kecil.
 
 ## 12. Status & keterbatasan
 
-- Belum ada test otomatis (unit/e2e) di repo; pengujian dilakukan manual/agen pengujian.
+- Test otomatis backend: `cd server && yarn test` (Node test runner bawaan, **tanpa PostgreSQL**). `test/calculator.test.js` mengecek rumus & validasi kalkulator; `test/auth.test.js` menjalankan Express sungguhan dengan database tiruan di memori (`test/helpers/setup.js`) untuk daftar/masuk, CSRF, profil, ganti password, dan hapus akun. Belum ada test frontend / e2e.
 - Faktor emisi belum tervalidasi resmi; ganti nilai di `server/prisma/data/factors.js` lalu jalankan seed.
 - Login Google & email reset aktif setelah `GOOGLE_CLIENT_ID/SECRET` dan `SMTP_*` diisi (lihat `server/.env.example`). Tanpa SMTP, tautan reset hanya dicetak di log server (mode development) dan tombol Google disembunyikan otomatis.
 - Deployment: build `client` (`yarn build`, sajikan `dist/` statis dengan fallback ke `index.html`), jalankan `server` dengan Node + PostgreSQL terkelola, set semua env di atas (`COOKIE_SECURE=true`, `CLIENT_URL` = domain frontend). Belum di-deploy.

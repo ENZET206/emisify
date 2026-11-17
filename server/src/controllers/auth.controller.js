@@ -63,3 +63,15 @@ exports.resetPassword = async (req, res) => {
 };
 
 exports.setTarget = async (req, res) => ok(res, { user: await authService.setTarget(req.user.id, v.target.parse(req.body).monthlyTargetKg) });
+
+exports.updateProfile = async (req, res) => ok(res, { user: await authService.updateProfile(req.user.id, v.profile.parse(req.body)) });
+
+// Other sessions are revoked (tokenVersion bump); this one gets a fresh cookie so the user stays logged in.
+exports.changePassword = async (req, res) => startSession(res, await authService.changePassword(req.user.id, v.changePassword.parse(req.body)));
+
+exports.deleteAccount = async (req, res) => {
+  await authService.deleteAccount(req.user.id, v.deleteAccount.parse(req.body || {}));
+  const { maxAge, ...opts } = cookieOptions();
+  res.clearCookie(COOKIE_NAME, opts);
+  return ok(res, { deleted: true });
+};

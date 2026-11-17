@@ -16,6 +16,8 @@ const resetLimiter = limiter(15 * 60 * 1000, 8, (req) => `${req.ip}:${String(req
 const registerLimiter = limiter(60 * 60 * 1000, 20);
 const aiLimiter = limiter(60 * 1000, 12, (req) => req.user?.id || req.ip);
 const apiLimiter = limiter(60 * 1000, 300);
+// Password-checking account actions (change password, delete account): per user, against password guessing.
+const accountLimiter = limiter(15 * 60 * 1000, 10, (req) => req.user?.id || req.ip);
 
 // CSRF mitigation for cookie auth: SameSite=Lax cookie + JSON-only mutations + Origin allow-list.
 function csrfGuard(req, res, next) {
@@ -27,4 +29,4 @@ function csrfGuard(req, res, next) {
   return next();
 }
 
-module.exports = { resetLimiter, loginLimiter, registerLimiter, aiLimiter, apiLimiter, csrfGuard };
+module.exports = { resetLimiter, loginLimiter, registerLimiter, aiLimiter, apiLimiter, accountLimiter, csrfGuard };

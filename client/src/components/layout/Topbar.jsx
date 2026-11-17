@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { ChevronDown, LogOut, UserRound, Menu, Trophy } from 'lucide-react';
+import { ChevronDown, LogOut, UserRound, Menu, Trophy, Settings } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import { useLang } from '../../context/LangContext';
 import { useToast } from '../../context/ToastContext';
@@ -45,6 +45,8 @@ function UserMenu() {
             <p className="truncate text-sm font-bold">{user?.name}</p>
             <p className="truncate text-xs text-muted">{user?.email}</p>
           </div>
+          <button type="button" role="menuitem" onClick={() => { setOpen(false); nav('/profile'); }} data-testid="user-menu-profile"
+            className="flex w-full items-center gap-2 rounded-2xl px-3 py-2.5 text-sm font-medium hover:bg-soft"><Settings className="h-4 w-4 text-brown" aria-hidden />{t('nav.profile')}</button>
           <button type="button" role="menuitem" onClick={() => { setOpen(false); nav('/progress'); }} data-testid="user-menu-progress"
             className="flex w-full items-center gap-2 rounded-2xl px-3 py-2.5 text-sm font-medium hover:bg-soft"><Trophy className="h-4 w-4 text-brown" aria-hidden />{t('nav.progress')}</button>
           <button type="button" role="menuitem" onClick={() => { setOpen(false); setConfirm(true); }} data-testid="logout-button"
