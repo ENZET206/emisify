@@ -117,4 +117,45 @@ async function setTarget(userId, monthlyTargetKg) {
   return safe;
 }
 
-module.exports = { register, login, publicUser, googleEnabled, googleAuthUrl, googleLogin, forgotPassword, findValidToken, resetPassword, setTarget };
+async function updateProfile(userId, { name, age }) {
+  const { tokenVersion, ...safe } = publicUser(await prisma.user.update({ where: { id: userId }, data: { name, age } }));
+  return safe;
+}
+
+const fieldError = (field, code, message) => new AppError(422, 'VALIDATION_ERROR', message, { fields: { [field]: { code } } });
+
+// Changes (or, for Google-only accounts, sets) the password and revokes every other session via tokenVersion.
+// Returns the full user (incl. tokenVersion) so the caller can re-issue the current session cookie.
+async function changePassword(userId, { currentPassword, newPassword }) {
+  const user = await prisma.user.findUnique({ where: { id: userId } });
+  if (!user) throw new AppError(404, 'NOT_FOUND', 'Akun tidak ditemukan');
+  if (user.passwordHash) {
+    if (!currentPassword) throw fieldError('currentPassword', 'required', 'Password saat ini wajib diisi');
+    if (!(await bcrypt.compare(currentPassword, user.passwordHash))) throw fieldError('currentPassword', 'wrongPassword', 'Password saat ini salah');
+    if (await bcrypt.compare(newPassword, user.passwordHash)) throw fieldError('newPassword', 'samePassword', 'Password baru harus berbeda');
+  }
+  const passwordHash = await bcrypt.hash(newPassword, 12);
+  const [updated] = await prisma.$transaction([
+    prisma.user.update({ where: { id: userId }, data: { passwordHash, tokenVersion: { increment: 1 } } }),
+    prisma.passwordResetToken.deleteMany({ where: { userId } }),
+  ]);
+  return publicUser(updated);
+}
+
+// Permanently deletes the account; all personal data cascades (see schema.prisma onDelete: Cascade).
+async function deleteAccount(userId, { password, confirmEmail }) {
+  const user = await prisma.user.findUnique({ where: { id: userId } });
+  if (!user) throw new AppError(404, 'NOT_FOUND', 'Akun tidak ditemukan');
+  if (user.passwordHash) {
+    if (!password) throw fieldError('password', 'required', 'Password wajib diisi');
+    if (!(await bcrypt.compare(password, user.passwordHash))) throw fieldError('password', 'wrongPassword', 'Password salah');
+  } else if (confirmEmail !== user.email) {
+    throw fieldError('confirmEmail', 'emailMismatch', 'Email tidak sesuai');
+  }
+  await prisma.user.delete({ where: { id: userId } });
+}
+
+module.exports = {
+  register, login, publicUser, googleEnabled, googleAuthUrl, googleLogin, forgotPassword, findValidToken, resetPassword, setTarget,
+  updateProfile, changePassword, deleteAccount,
+};

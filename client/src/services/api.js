@@ -35,7 +35,7 @@ export const api = {
   get: (p, o) => request(p, o),
   post: (p, body) => request(p, { method: 'POST', body: body ?? {} }),
   patch: (p, body) => request(p, { method: 'PATCH', body: body ?? {} }),
-  del: (p) => request(p, { method: 'DELETE' }),
+  del: (p, body) => request(p, { method: 'DELETE', body }),
 };
 
 // Streams Server-Sent Events from POST /api/ai/chat and calls onEvent for each parsed event.

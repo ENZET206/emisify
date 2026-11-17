@@ -22,6 +22,7 @@ import RecommendationDetailPage from '../pages/recommendations/RecommendationDet
 import AskAiPage from '../pages/recommendations/AskAiPage';
 import ChallengesPage from '../pages/challenges/ChallengesPage';
 import ProgressPage from '../pages/progress/ProgressPage';
+import ProfilePage from '../pages/profile/ProfilePage';
 
 export default function AppRoutes() {
   return (
@@ -47,6 +48,7 @@ export default function AppRoutes() {
         <Route path="/ask-ai" element={<AskAiPage />} />
         <Route path="/challenges" element={<ChallengesPage />} />
         <Route path="/progress" element={<ProgressPage />} />
+        <Route path="/profile" element={<ProfilePage />} />
       </Route>
       <Route path="*" element={<NotFoundPage />} />
     </Routes>

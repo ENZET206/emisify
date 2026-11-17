@@ -25,4 +25,19 @@ const forgot = z.object({ email, lang: z.enum(['id', 'en']).default('id') });
 const reset = z.object({ token: z.string().regex(/^[a-f0-9]{64}$/, 'invalidToken'), password: strongPassword() });
 const target = z.object({ monthlyTargetKg: z.number({ invalid_type_error: 'number' }).min(1, 'min').max(100000, 'max').nullable() });
 
-module.exports = { register, login, googleUrl, googleCallback, forgot, reset, target };
+const profile = z.object({
+  name: z.string({ required_error: 'required' }).trim().min(2, 'nameMin').max(60, 'maxLength'),
+  age: z.coerce.number({ invalid_type_error: 'number' }).int('integer').min(10, 'ageMin').max(100, 'ageMax').nullable(),
+});
+// currentPassword is required only when the account already has a password (checked in the service).
+const changePassword = z.object({
+  currentPassword: z.string().max(72, 'maxLength').optional(),
+  newPassword: strongPassword(),
+});
+// Accounts with a password confirm with it; Google-only accounts confirm by retyping their email.
+const deleteAccount = z.object({
+  password: z.string().max(72, 'maxLength').optional(),
+  confirmEmail: z.string().trim().toLowerCase().max(120, 'maxLength').optional(),
+});
+
+module.exports = { register, login, googleUrl, googleCallback, forgot, reset, target, profile, changePassword, deleteAccount };
