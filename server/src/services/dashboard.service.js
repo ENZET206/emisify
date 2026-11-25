@@ -1,4 +1,4 @@
-const prisma = require('../config/prisma');
+const db = require('../config/db');
 const { AppError } = require('../utils/http');
 const { serialize, rangeWhere } = require('./calculation.service');
 const { round, TREE_KG_PER_YEAR } = require('./calculator/calculator.service');
@@ -11,11 +11,11 @@ const pct = (part, total) => (total > 0 ? Math.round((part / total) * 1000) / 10
 async function summary(userId) {
   const today = todayKey();
   const sixMonthsAgo = monthStartKey(today, -5);
-  const rows = await prisma.calculation.findMany({
-    where: { userId, activityDate: { gte: dayKeyToDate(sixMonthsAgo) } },
-    orderBy: { activityDate: 'asc' },
-  });
-  const allCount = await prisma.calculation.count({ where: { userId } });
+  const rows = await db.query(
+    'SELECT * FROM "Calculation" WHERE "userId" = $1 AND "activityDate" >= $2 ORDER BY "activityDate" ASC',
+    [userId, dayKeyToDate(sixMonthsAgo)],
+  );
+  const { count: allCount } = await db.one('SELECT COUNT(*)::int AS count FROM "Calculation" WHERE "userId" = $1', [userId]);
   const thisMonth = monthStartKey(today);
   const lastMonth = monthStartKey(today, -1);
   const keyOf = (r) => dateToDayKey(r.activityDate);
@@ -42,20 +42,28 @@ async function summary(userId) {
   }
 
   const top = [...byActivity].sort((a, b) => b.kg - a.kg)[0];
-  const doneIds = (await prisma.userRecommendation.findMany({ where: { userId, status: 'DONE' }, select: { recommendationId: true } })).map((x) => x.recommendationId);
-  const recommendation = await prisma.recommendation.findFirst({
-    where: { id: { notIn: doneIds }, ...(top && top.kg > 0 ? { activityType: top.type } : {}) },
-    orderBy: { sortOrder: 'asc' },
-  });
-  const activeChallenges = await prisma.userChallenge.findMany({
-    where: { userId, status: 'JOINED' },
-    include: { challenge: true },
-    orderBy: { joinedAt: 'desc' },
-    take: 2,
-  });
-  const recent = await prisma.calculation.findMany({ where: { userId }, orderBy: [{ activityDate: 'desc' }, { createdAt: 'desc' }], take: 3 });
+  // First recommendation the user hasn't completed, preferring their biggest emission category.
+  const recParams = [userId];
+  let recSql = `SELECT r.* FROM "Recommendation" r
+    WHERE NOT EXISTS (SELECT 1 FROM "UserRecommendation" ur WHERE ur."recommendationId" = r.id AND ur."userId" = $1 AND ur.status = 'DONE')`;
+  if (top && top.kg > 0) {
+    recParams.push(top.type);
+    recSql += ' AND r."activityType" = $2';
+  }
+  const recommendation = await db.one(`${recSql} ORDER BY r."sortOrder" ASC LIMIT 1`, recParams);
+  const activeChallenges = await db.query(
+    `SELECT uc."challengeId", uc.progress, gc.target, gc.content, gc.icon
+     FROM "UserChallenge" uc JOIN "GreenChallenge" gc ON gc.id = uc."challengeId"
+     WHERE uc."userId" = $1 AND uc.status = 'JOINED'
+     ORDER BY uc."joinedAt" DESC LIMIT 2`,
+    [userId],
+  );
+  const recent = await db.query(
+    'SELECT * FROM "Calculation" WHERE "userId" = $1 ORDER BY "activityDate" DESC, "createdAt" DESC LIMIT 3',
+    [userId],
+  );
 
-  const { monthlyTargetKg } = await prisma.user.findUnique({ where: { id: userId }, select: { monthlyTargetKg: true } });
+  const { monthlyTargetKg } = await db.one('SELECT "monthlyTargetKg" FROM "User" WHERE id = $1', [userId]);
   return {
     target: monthlyTargetKg ? {
       kg: monthlyTargetKg,
@@ -74,7 +82,7 @@ async function summary(userId) {
     daily,
     topActivity: top && top.kg > 0 ? top.type : null,
     recommendation,
-    activeChallenges: activeChallenges.map((uc) => ({ id: uc.challengeId, progress: uc.progress, target: uc.challenge.target, content: uc.challenge.content, icon: uc.challenge.icon })),
+    activeChallenges: activeChallenges.map((uc) => ({ id: uc.challengeId, progress: uc.progress, target: uc.target, content: uc.content, icon: uc.icon })),
     recent: recent.map(serialize),
   };
 }
@@ -86,7 +94,8 @@ const IMPACTS = [
 ];
 
 async function impactCategories(userId, range) {
-  const rows = await prisma.calculation.findMany({ where: { userId, ...rangeWhere(range) } });
+  const params = [userId];
+  const rows = await db.query(`SELECT * FROM "Calculation" WHERE "userId" = $1${rangeWhere(range, params)}`, params);
   const total = sum(rows);
   const categories = IMPACTS.map((c) => {
     const r = rows.filter((x) => x.impactCategory === c.key);
@@ -99,8 +108,8 @@ async function impactCategories(userId, range) {
 async function impactDetail(userId, slug, range) {
   const cat = IMPACTS.find((c) => c.slug === slug);
   if (!cat) throw new AppError(404, 'NOT_FOUND', 'Kategori dampak tidak ditemukan');
-  const where = { userId, ...rangeWhere(range) };
-  const all = await prisma.calculation.findMany({ where });
+  const params = [userId];
+  const all = await db.query(`SELECT * FROM "Calculation" WHERE "userId" = $1${rangeWhere(range, params)}`, params);
   const rows = all.filter((r) => r.impactCategory === cat.key).sort((a, b) => b.resultKg - a.resultKg);
   const totalAll = sum(all);
   const kg = sum(rows);

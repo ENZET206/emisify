@@ -1,5 +1,5 @@
 // HTTP tests for register/login/session and the Profile page endpoints, against an in-memory database.
-const { prisma, startServer } = require('./helpers/setup');
+const { db, startServer } = require('./helpers/setup');
 const { test, describe, before, after, beforeEach } = require('node:test');
 const assert = require('node:assert/strict');
 const jwt = require('jsonwebtoken');
@@ -10,8 +10,8 @@ let jars;
 before(async () => { ({ request: api, close, jars } = await startServer()); });
 after(() => close());
 beforeEach(() => {
-  prisma._users.clear();
-  prisma._resetTokens.clear();
+  db._users.clear();
+  db._resetTokens.clear();
   for (const k of Object.keys(jars)) delete jars[k];
 });
 
@@ -71,7 +71,7 @@ describe('daftar & masuk', () => {
     const res = await api('hp', 'DELETE', '/user', { password: PASSWORD }, { Origin: 'https://situs-jahat.example' });
     assert.equal(res.status, 403);
     assert.equal(res.body.error.code, 'FORBIDDEN_ORIGIN');
-    assert.equal(prisma._users.size, 1);
+    assert.equal(db._users.size, 1);
   });
 });
 
@@ -133,7 +133,7 @@ describe('ganti password', () => {
   });
 
   test('akun Google tanpa password bisa membuat password tanpa password lama', async () => {
-    const g = await prisma.user.create({ data: { name: 'Gita', email: 'gita@contoh.id', googleId: 'google-123' } });
+    const g = db.createUser({ name: 'Gita', email: 'gita@contoh.id', googleId: 'google-123' });
     loginAsGoogleUser('hp', g);
     const res = await api('hp', 'PATCH', '/user/password', { newPassword: 'Google123' });
     assert.equal(res.status, 200);
@@ -147,23 +147,23 @@ describe('hapus akun', () => {
     await register();
     assert.equal(fieldCode(await api('hp', 'DELETE', '/user', {}), 'password'), 'required');
     assert.equal(fieldCode(await api('hp', 'DELETE', '/user', { password: 'Salah123' }), 'password'), 'wrongPassword');
-    assert.equal(prisma._users.size, 1, 'akun belum boleh terhapus');
+    assert.equal(db._users.size, 1, 'akun belum boleh terhapus');
   });
 
   test('berhasil: data terhapus, sesi berakhir, tidak bisa masuk lagi', async () => {
     await register();
     const res = await api('hp', 'DELETE', '/user', { password: PASSWORD });
     assert.equal(res.status, 200);
-    assert.equal(prisma._users.size, 0);
+    assert.equal(db._users.size, 0);
     assert.equal((await api('hp', 'GET', '/auth/me')).status, 401);
     assert.equal((await api('laptop', 'POST', '/auth/login', { email: 'budi@contoh.id', password: PASSWORD })).status, 401);
   });
 
   test('akun Google tanpa password konfirmasi dengan email', async () => {
-    const g = await prisma.user.create({ data: { name: 'Gita', email: 'gita@contoh.id', googleId: 'google-123' } });
+    const g = db.createUser({ name: 'Gita', email: 'gita@contoh.id', googleId: 'google-123' });
     loginAsGoogleUser('hp', g);
     assert.equal(fieldCode(await api('hp', 'DELETE', '/user', { confirmEmail: 'lain@contoh.id' }), 'confirmEmail'), 'emailMismatch');
     assert.equal((await api('hp', 'DELETE', '/user', { confirmEmail: 'GITA@contoh.id' })).status, 200);
-    assert.equal(prisma._users.size, 0);
+    assert.equal(db._users.size, 0);
   });
 });

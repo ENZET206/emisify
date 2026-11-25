@@ -1,6 +1,6 @@
 const crypto = require('crypto');
 const bcrypt = require('bcryptjs');
-const prisma = require('../config/prisma');
+const db = require('../config/db');
 const env = require('../config/env');
 const { AppError } = require('../utils/http');
 const { sendMail, resetEmail } = require('./mail.service');
@@ -13,16 +13,27 @@ const publicUser = (u) => ({
 const DUMMY_HASH = bcrypt.hashSync('emisify-timing-guard', 12);
 const sha256 = (s) => crypto.createHash('sha256').update(s).digest('hex');
 
+const USER_LOOKUP = {
+  id: 'SELECT * FROM "User" WHERE id = $1',
+  email: 'SELECT * FROM "User" WHERE email = $1',
+  googleId: 'SELECT * FROM "User" WHERE "googleId" = $1',
+};
+const findUserBy = (key, value) => db.one(USER_LOOKUP[key], [value]);
+const createUser = ({ name, email, age = null, passwordHash = null, googleId = null }) => db.one(
+  'INSERT INTO "User" (id, name, email, age, "passwordHash", "googleId", "updatedAt") VALUES ($1, $2, $3, $4, $5, $6, NOW()) RETURNING *',
+  [db.newId(), name, email, age, passwordHash, googleId],
+);
+
 async function register({ name, email, age, password }) {
-  const exists = await prisma.user.findUnique({ where: { email } });
+  const exists = await findUserBy('email', email);
   if (exists) throw new AppError(409, 'EMAIL_TAKEN', 'Email sudah terdaftar', { fields: { email: { code: 'emailTaken' } } });
   const passwordHash = await bcrypt.hash(password, 12);
-  const user = await prisma.user.create({ data: { name, email, age, passwordHash } });
+  const user = await createUser({ name, email, age, passwordHash });
   return publicUser(user);
 }
 
 async function login({ email, password }) {
-  const user = await prisma.user.findUnique({ where: { email } });
+  const user = await findUserBy('email', email);
   if (user && !user.passwordHash) throw new AppError(401, 'GOOGLE_ACCOUNT', 'Akun ini terdaftar lewat Google. Masuk dengan Google atau atur password lewat "Lupa password".');
   const valid = await bcrypt.compare(password, user?.passwordHash || DUMMY_HASH);
   if (!user || !valid) throw new AppError(401, 'INVALID_CREDENTIALS', 'Email atau password salah');
@@ -69,24 +80,25 @@ async function googleLogin(code, redirectUri) {
     throw new AppError(401, 'GOOGLE_FAILED', 'Akun Google tidak dapat diverifikasi');
   }
   const email = info.email.toLowerCase();
-  let user = await prisma.user.findUnique({ where: { googleId: info.sub } });
+  let user = await findUserBy('googleId', info.sub);
   if (!user) {
-    const byEmail = await prisma.user.findUnique({ where: { email } });
+    const byEmail = await findUserBy('email', email);
     user = byEmail
-      ? await prisma.user.update({ where: { id: byEmail.id }, data: { googleId: info.sub } })
-      : await prisma.user.create({ data: { name: (info.name || email.split('@')[0]).slice(0, 60), email, googleId: info.sub } });
+      ? await db.one('UPDATE "User" SET "googleId" = $1, "updatedAt" = NOW() WHERE id = $2 RETURNING *', [info.sub, byEmail.id])
+      : await createUser({ name: (info.name || email.split('@')[0]).slice(0, 60), email, googleId: info.sub });
   }
   return publicUser(user);
 }
 
 async function forgotPassword(email, lang) {
-  const user = await prisma.user.findUnique({ where: { email } });
+  const user = await findUserBy('email', email);
   if (!user) return;
   const raw = crypto.randomBytes(32).toString('hex');
-  await prisma.passwordResetToken.deleteMany({ where: { userId: user.id, usedAt: null } });
-  await prisma.passwordResetToken.create({
-    data: { userId: user.id, tokenHash: sha256(raw), expiresAt: new Date(Date.now() + env.resetTokenMinutes * 60000) },
-  });
+  await db.query('DELETE FROM "PasswordResetToken" WHERE "userId" = $1 AND "usedAt" IS NULL', [user.id]);
+  await db.query(
+    'INSERT INTO "PasswordResetToken" (id, "userId", "tokenHash", "expiresAt") VALUES ($1, $2, $3, $4)',
+    [db.newId(), user.id, sha256(raw), new Date(Date.now() + env.resetTokenMinutes * 60000)],
+  );
   const link = `${env.appUrl.replace(/\/$/, '')}/reset-password?token=${raw}`;
   try {
     await sendMail({ to: user.email, ...resetEmail({ name: user.name, link, minutes: env.resetTokenMinutes, lang }) });
@@ -97,7 +109,7 @@ async function forgotPassword(email, lang) {
 }
 
 async function findValidToken(raw) {
-  const rec = await prisma.passwordResetToken.findUnique({ where: { tokenHash: sha256(raw) } });
+  const rec = await db.one('SELECT * FROM "PasswordResetToken" WHERE "tokenHash" = $1', [sha256(raw)]);
   if (!rec || rec.usedAt || rec.expiresAt < new Date()) throw new AppError(400, 'INVALID_TOKEN', 'Tautan reset tidak valid atau sudah kedaluwarsa');
   return rec;
 }
@@ -105,20 +117,22 @@ async function findValidToken(raw) {
 async function resetPassword(raw, password) {
   const rec = await findValidToken(raw);
   const passwordHash = await bcrypt.hash(password, 12);
-  await prisma.$transaction([
-    prisma.user.update({ where: { id: rec.userId }, data: { passwordHash, tokenVersion: { increment: 1 } } }),
-    prisma.passwordResetToken.update({ where: { id: rec.id }, data: { usedAt: new Date() } }),
-    prisma.passwordResetToken.deleteMany({ where: { userId: rec.userId, usedAt: null } }),
-  ]);
+  await db.transaction(async (client) => {
+    await db.query('UPDATE "User" SET "passwordHash" = $1, "tokenVersion" = "tokenVersion" + 1, "updatedAt" = NOW() WHERE id = $2', [passwordHash, rec.userId], client);
+    await db.query('UPDATE "PasswordResetToken" SET "usedAt" = NOW() WHERE id = $1', [rec.id], client);
+    await db.query('DELETE FROM "PasswordResetToken" WHERE "userId" = $1 AND "usedAt" IS NULL', [rec.userId], client);
+  });
 }
 
 async function setTarget(userId, monthlyTargetKg) {
-  const { tokenVersion, ...safe } = publicUser(await prisma.user.update({ where: { id: userId }, data: { monthlyTargetKg } }));
+  const user = await db.one('UPDATE "User" SET "monthlyTargetKg" = $1, "updatedAt" = NOW() WHERE id = $2 RETURNING *', [monthlyTargetKg, userId]);
+  const { tokenVersion, ...safe } = publicUser(user);
   return safe;
 }
 
 async function updateProfile(userId, { name, age }) {
-  const { tokenVersion, ...safe } = publicUser(await prisma.user.update({ where: { id: userId }, data: { name, age } }));
+  const user = await db.one('UPDATE "User" SET name = $1, age = $2, "updatedAt" = NOW() WHERE id = $3 RETURNING *', [name, age, userId]);
+  const { tokenVersion, ...safe } = publicUser(user);
   return safe;
 }
 
@@ -127,7 +141,7 @@ const fieldError = (field, code, message) => new AppError(422, 'VALIDATION_ERROR
 // Changes (or, for Google-only accounts, sets) the password and revokes every other session via tokenVersion.
 // Returns the full user (incl. tokenVersion) so the caller can re-issue the current session cookie.
 async function changePassword(userId, { currentPassword, newPassword }) {
-  const user = await prisma.user.findUnique({ where: { id: userId } });
+  const user = await findUserBy('id', userId);
   if (!user) throw new AppError(404, 'NOT_FOUND', 'Akun tidak ditemukan');
   if (user.passwordHash) {
     if (!currentPassword) throw fieldError('currentPassword', 'required', 'Password saat ini wajib diisi');
@@ -135,16 +149,20 @@ async function changePassword(userId, { currentPassword, newPassword }) {
     if (await bcrypt.compare(newPassword, user.passwordHash)) throw fieldError('newPassword', 'samePassword', 'Password baru harus berbeda');
   }
   const passwordHash = await bcrypt.hash(newPassword, 12);
-  const [updated] = await prisma.$transaction([
-    prisma.user.update({ where: { id: userId }, data: { passwordHash, tokenVersion: { increment: 1 } } }),
-    prisma.passwordResetToken.deleteMany({ where: { userId } }),
-  ]);
+  const updated = await db.transaction(async (client) => {
+    const u = await db.one(
+      'UPDATE "User" SET "passwordHash" = $1, "tokenVersion" = "tokenVersion" + 1, "updatedAt" = NOW() WHERE id = $2 RETURNING *',
+      [passwordHash, userId], client,
+    );
+    await db.query('DELETE FROM "PasswordResetToken" WHERE "userId" = $1', [userId], client);
+    return u;
+  });
   return publicUser(updated);
 }
 
-// Permanently deletes the account; all personal data cascades (see schema.prisma onDelete: Cascade).
+// Permanently deletes the account; all personal data cascades (foreign keys ON DELETE CASCADE in database/schema.sql).
 async function deleteAccount(userId, { password, confirmEmail }) {
-  const user = await prisma.user.findUnique({ where: { id: userId } });
+  const user = await findUserBy('id', userId);
   if (!user) throw new AppError(404, 'NOT_FOUND', 'Akun tidak ditemukan');
   if (user.passwordHash) {
     if (!password) throw fieldError('password', 'required', 'Password wajib diisi');
@@ -152,7 +170,7 @@ async function deleteAccount(userId, { password, confirmEmail }) {
   } else if (confirmEmail !== user.email) {
     throw fieldError('confirmEmail', 'emailMismatch', 'Email tidak sesuai');
   }
-  await prisma.user.delete({ where: { id: userId } });
+  await db.query('DELETE FROM "User" WHERE id = $1', [userId]);
 }
 
 module.exports = {

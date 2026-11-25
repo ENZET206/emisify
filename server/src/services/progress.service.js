@@ -1,12 +1,24 @@
-const prisma = require('../config/prisma');
+const db = require('../config/db');
 const { round, TREE_KG_PER_YEAR } = require('./calculator/calculator.service');
 
 async function computeStats(userId) {
-  const [recs, challenges, calculationsCount] = await Promise.all([
-    prisma.userRecommendation.findMany({ where: { userId }, include: { recommendation: true } }),
-    prisma.userChallenge.findMany({ where: { userId }, include: { challenge: true } }),
-    prisma.calculation.count({ where: { userId } }),
+  // Each row also carries its joined recommendation / challenge as a nested object (row_to_json).
+  const [recs, challenges, countRow] = await Promise.all([
+    db.query(
+      `SELECT ur.*, row_to_json(r) AS recommendation
+       FROM "UserRecommendation" ur JOIN "Recommendation" r ON r.id = ur."recommendationId"
+       WHERE ur."userId" = $1`,
+      [userId],
+    ),
+    db.query(
+      `SELECT uc.*, row_to_json(gc) AS challenge
+       FROM "UserChallenge" uc JOIN "GreenChallenge" gc ON gc.id = uc."challengeId"
+       WHERE uc."userId" = $1`,
+      [userId],
+    ),
+    db.one('SELECT COUNT(*)::int AS count FROM "Calculation" WHERE "userId" = $1', [userId]),
   ]);
+  const calculationsCount = countRow.count;
   const startedRecs = recs.filter((r) => r.status !== 'SAVED');
   const doneRecs = recs.filter((r) => r.status === 'DONE');
   const doneChallenges = challenges.filter((c) => c.status === 'COMPLETED');
@@ -34,13 +46,17 @@ const ruleValue = (rule, s) => ({
 async function evaluateAchievements(userId, stats) {
   const s = stats || (await computeStats(userId));
   const [all, earned] = await Promise.all([
-    prisma.achievement.findMany(),
-    prisma.userAchievement.findMany({ where: { userId }, select: { achievementId: true } }),
+    db.query('SELECT * FROM "Achievement"'),
+    db.query('SELECT "achievementId" FROM "UserAchievement" WHERE "userId" = $1', [userId]),
   ]);
   const earnedIds = new Set(earned.map((e) => e.achievementId));
   const newly = all.filter((a) => !earnedIds.has(a.id) && ruleValue(a.rule, s) >= a.threshold);
-  if (newly.length) {
-    await prisma.userAchievement.createMany({ data: newly.map((a) => ({ userId, achievementId: a.id })), skipDuplicates: true });
+  for (const a of newly) {
+    await db.query(
+      `INSERT INTO "UserAchievement" (id, "userId", "achievementId") VALUES ($1, $2, $3)
+       ON CONFLICT ("userId", "achievementId") DO NOTHING`,
+      [db.newId(), userId, a.id],
+    );
   }
   return newly.map((a) => ({ id: a.id, slug: a.slug, content: a.content, image: a.image, icon: a.icon }));
 }
@@ -49,8 +65,8 @@ async function getProgress(userId) {
   const stats = await computeStats(userId);
   const newlyEarned = await evaluateAchievements(userId, stats);
   const [achievements, earned] = await Promise.all([
-    prisma.achievement.findMany({ orderBy: { sortOrder: 'asc' } }),
-    prisma.userAchievement.findMany({ where: { userId } }),
+    db.query('SELECT * FROM "Achievement" ORDER BY "sortOrder" ASC'),
+    db.query('SELECT * FROM "UserAchievement" WHERE "userId" = $1', [userId]),
   ]);
   const earnedMap = Object.fromEntries(earned.map((e) => [e.achievementId, e.earnedAt]));
   const actions = [
