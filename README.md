@@ -12,7 +12,7 @@ Emisify membantu pengguna mencatat aktivitas harian (transportasi, listrik, AC, 
 |---|---|
 | Frontend (`client/`) | React 18 (.jsx), Vite 5, Tailwind CSS 3.4, React Router 6, Recharts 2, Lucide React |
 | Backend (`server/`) | Node.js ≥ 20, Express 4 (.js), Zod (validasi), bcryptjs, jsonwebtoken, helmet, cors, cookie-parser, express-rate-limit |
-| Database | PostgreSQL ≥ 13 + Prisma ORM 5.22 |
+| Database | PostgreSQL ≥ 13, diakses langsung dengan raw query (driver `pg`, query berparameter `$1, $2`), tanpa ORM |
 | AI | Service terpisah `server/src/services/ai/` dengan provider `demo` / `openai` / `emergent` |
 
 ## 2. Struktur folder
@@ -28,7 +28,7 @@ emisify/
 │       ├── hooks/ services/ utils/ i18n/ routes/
 │       ├── App.jsx  main.jsx  index.css
 ├── server/
-│   ├── prisma/             # schema.prisma, migrations/, seed.js, data/ (faktor, rekomendasi, tantangan, reward)
+│   ├── database/           # schema.sql (CREATE TABLE), init.js, seed.js, data/ (faktor, rekomendasi, tantangan, reward)
 │   └── src/
 │       ├── config/ controllers/ middleware/ routes/ validators/ utils/
 │       ├── services/       # calculator/, ai/, auth, calculation, dashboard, recommendation, challenge, progress
@@ -50,10 +50,10 @@ psql -U postgres -c "CREATE DATABASE emisify OWNER emisify;"
 cp server/.env.example server/.env      # isi DATABASE_URL & AUTH_SECRET (openssl rand -hex 32)
 cp client/.env.example client/.env      # VITE_PROXY_TARGET=http://localhost:4000
 
-# 3. Install, migrasi, seed
+# 3. Install, buat tabel, seed
 yarn install && yarn install:all
-cd server && npx prisma migrate deploy && node prisma/seed.js && cd ..
-#   (saat mengembangkan schema: npx prisma migrate dev --name <nama>)
+cd server && yarn db:init && yarn seed && cd ..
+#   (db:init menjalankan server/database/schema.sql; aman dijalankan ulang)
 
 # 4. Jalankan client (5173) + server (4000)
 yarn dev
@@ -144,7 +144,7 @@ Client: `VITE_API_URL` (kosong = same-origin `/api`), `VITE_PROXY_TARGET` (proxy
 | GET | `/ai/status` · `/ai/history` · DELETE `/ai/history` | Mode AI & riwayat chat |
 | POST | `/ai/chat` | `{message ≤500, recommendationId?, lang}` → stream SSE (`meta`/`delta`/`done`/`error`), rate limit 12/menit |
 
-## 6b. Struktur database `emisify` (PostgreSQL, Prisma)
+## 6b. Struktur database `emisify` (PostgreSQL, raw query)
 
 ```
 User 1─* Calculation *─0..1 EmissionFactor
@@ -171,7 +171,7 @@ User 1─* PasswordResetToken
 
 File siap impor PostgreSQL (struktur + data referensi + akun demo): `server/database/` — lihat `server/database/DATABASE.md`.
 
-Migrasi: `server/prisma/migrations/` (init → auth_google_reset_target → session_token_version).
+Struktur tabel: `server/database/schema.sql` (dibuat dengan `yarn db:init`). Koneksi database ada di `server/src/config/db.js`; semua query ditulis sebagai SQL di folder `server/src/services/`.
 
 ## 7. Kalkulator emisi
 
@@ -217,7 +217,7 @@ Audit: 17 halaman/varian + 4 style/komponen + 8 aset kecil.
 ## 12. Status & keterbatasan
 
 - Test otomatis backend: `cd server && yarn test` (Node test runner bawaan, **tanpa PostgreSQL**). `test/calculator.test.js` mengecek rumus & validasi kalkulator; `test/auth.test.js` menjalankan Express sungguhan dengan database tiruan di memori (`test/helpers/setup.js`) untuk daftar/masuk, CSRF, profil, ganti password, dan hapus akun. Belum ada test frontend / e2e.
-- Faktor emisi belum tervalidasi resmi; ganti nilai di `server/prisma/data/factors.js` lalu jalankan seed.
+- Faktor emisi belum tervalidasi resmi; ganti nilai di `server/database/data/factors.js` lalu jalankan seed.
 - Login Google & email reset aktif setelah `GOOGLE_CLIENT_ID/SECRET` dan `SMTP_*` diisi (lihat `server/.env.example`). Tanpa SMTP, tautan reset hanya dicetak di log server (mode development) dan tombol Google disembunyikan otomatis.
 - Deployment: build `client` (`yarn build`, sajikan `dist/` statis dengan fallback ke `index.html`), jalankan `server` dengan Node + PostgreSQL terkelola, set semua env di atas (`COOKIE_SECURE=true`, `CLIENT_URL` = domain frontend). Belum di-deploy.
 - Preview Emergent: `/app/backend/server.py` menjalankan `/app/scripts/emisify_preview.sh` (PostgreSQL → migrate → seed → Express :4000) dan mem-proxy `/api` dari port 8001.

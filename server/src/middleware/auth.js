@@ -1,6 +1,6 @@
 const jwt = require('jsonwebtoken');
 const env = require('../config/env');
-const prisma = require('../config/prisma');
+const db = require('../config/db');
 const { AppError } = require('../utils/http');
 const { publicUser } = require('../services/auth.service');
 
@@ -27,7 +27,7 @@ async function requireAuth(req, res, next) {
     } catch {
       throw new AppError(401, 'INVALID_SESSION', 'Sesi tidak valid atau kedaluwarsa');
     }
-    const user = await prisma.user.findUnique({ where: { id: payload.sub } });
+    const user = await db.one('SELECT * FROM "User" WHERE id = $1', [payload.sub]);
     if (!user || user.tokenVersion !== payload.ver) throw new AppError(401, 'INVALID_SESSION', 'Sesi tidak valid atau sudah berakhir');
     const { tokenVersion, ...safe } = publicUser(user);
     req.user = safe;

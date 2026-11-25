@@ -1,6 +1,6 @@
 const env = require('./config/env');
 const app = require('./app');
-const prisma = require('./config/prisma');
+const db = require('./config/db');
 
 const server = app.listen(env.port, () => {
   console.log(`Emisify API running on http://localhost:${env.port} (AI provider: ${env.ai.provider})`);
@@ -8,7 +8,7 @@ const server = app.listen(env.port, () => {
 
 const shutdown = async () => {
   server.close();
-  await prisma.$disconnect();
+  await db.pool.end();
   process.exit(0);
 };
 process.on('SIGTERM', shutdown);

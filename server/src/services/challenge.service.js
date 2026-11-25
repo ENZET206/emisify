@@ -1,4 +1,4 @@
-const prisma = require('../config/prisma');
+const db = require('../config/db');
 const env = require('../config/env');
 const { AppError } = require('../utils/http');
 const { evaluateAchievements } = require('./progress.service');
@@ -28,17 +28,17 @@ function shape(c, uc, now = Date.now()) {
 
 async function list(userId) {
   const [all, mine] = await Promise.all([
-    prisma.greenChallenge.findMany({ where: { active: true }, orderBy: { sortOrder: 'asc' } }),
-    prisma.userChallenge.findMany({ where: { userId } }),
+    db.query('SELECT * FROM "GreenChallenge" WHERE active = TRUE ORDER BY "sortOrder" ASC'),
+    db.query('SELECT * FROM "UserChallenge" WHERE "userId" = $1', [userId]),
   ]);
   const byId = Object.fromEntries(mine.map((m) => [m.challengeId, m]));
   return all.map((c) => shape(c, byId[c.id]));
 }
 
 async function load(userId, id) {
-  const c = await prisma.greenChallenge.findFirst({ where: { id, active: true } });
+  const c = await db.one('SELECT * FROM "GreenChallenge" WHERE id = $1 AND active = TRUE', [id]);
   if (!c) throw new AppError(404, 'NOT_FOUND', 'Tantangan tidak ditemukan');
-  const uc = await prisma.userChallenge.findUnique({ where: { userId_challengeId: { userId, challengeId: id } } });
+  const uc = await db.one('SELECT * FROM "UserChallenge" WHERE "userId" = $1 AND "challengeId" = $2', [userId, id]);
   return { c, uc };
 }
 
@@ -47,12 +47,15 @@ async function join(userId, id) {
   const s = uc && shape(c, uc);
   if (s?.state === 'COMPLETED') throw new AppError(409, 'ALREADY_COMPLETED', 'Tantangan ini sudah kamu selesaikan');
   if (s?.state === 'JOINED') throw new AppError(409, 'ALREADY_JOINED', 'Kamu sudah mengikuti tantangan ini');
-  const data = { progress: 0, status: 'JOINED', joinedAt: new Date(), lastCheckinAt: null, completedAt: null };
-  const saved = await prisma.userChallenge.upsert({
-    where: { userId_challengeId: { userId, challengeId: id } },
-    create: { userId, challengeId: id, ...data },
-    update: data,
-  });
+  // Insert, or restart the existing row (e.g. after it expired): progress 0, joined now.
+  const saved = await db.one(
+    `INSERT INTO "UserChallenge" (id, "userId", "challengeId", progress, status, "joinedAt", "lastCheckinAt", "completedAt")
+     VALUES ($1, $2, $3, 0, 'JOINED', $4, NULL, NULL)
+     ON CONFLICT ("userId", "challengeId") DO UPDATE
+       SET progress = 0, status = 'JOINED', "joinedAt" = EXCLUDED."joinedAt", "lastCheckinAt" = NULL, "completedAt" = NULL
+     RETURNING *`,
+    [db.newId(), userId, id, new Date()],
+  );
   return shape(c, saved);
 }
 
@@ -66,10 +69,14 @@ async function checkin(userId, id) {
   if (s.nextCheckinAt) throw new AppError(429, 'CHECKIN_COOLDOWN', 'Kamu sudah mencatat progres. Coba lagi nanti.', { nextCheckinAt: s.nextCheckinAt });
   const progress = uc.progress + 1;
   const done = progress >= c.target;
-  const saved = await prisma.userChallenge.update({
-    where: { id: uc.id },
-    data: { progress, lastCheckinAt: new Date(), ...(done ? { status: 'COMPLETED', completedAt: new Date() } : {}) },
-  });
+  const now = new Date();
+  const saved = await db.one(
+    `UPDATE "UserChallenge" SET progress = $1, "lastCheckinAt" = $2,
+       status = CASE WHEN $3 THEN 'COMPLETED'::"UserChallengeStatus" ELSE status END,
+       "completedAt" = CASE WHEN $3 THEN $2 ELSE "completedAt" END
+     WHERE id = $4 RETURNING *`,
+    [progress, now, done, uc.id],
+  );
   const newlyEarned = await evaluateAchievements(userId);
   return { challenge: shape(c, saved), completed: done, newlyEarned };
 }

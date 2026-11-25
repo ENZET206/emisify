@@ -1,16 +1,21 @@
-const prisma = require('../config/prisma');
+const db = require('../config/db');
 const { AppError } = require('../utils/http');
 const { evaluateAchievements } = require('./progress.service');
 const { dayKeyToDate, todayKey, addDaysKey } = require('../utils/time');
 
 async function relevantTypes(userId) {
-  const rows = await prisma.calculation.groupBy({
-    by: ['activityType'],
-    where: { userId, activityDate: { gte: dayKeyToDate(addDaysKey(todayKey(), -29)) } },
-    _sum: { resultKg: true },
-  });
-  return rows.filter((r) => r._sum.resultKg > 0).sort((a, b) => b._sum.resultKg - a._sum.resultKg).slice(0, 2).map((r) => r.activityType);
+  const rows = await db.query(
+    `SELECT "activityType", SUM("resultKg") AS kg FROM "Calculation"
+     WHERE "userId" = $1 AND "activityDate" >= $2 GROUP BY "activityType"`,
+    [userId, dayKeyToDate(addDaysKey(todayKey(), -29))],
+  );
+  return rows.filter((r) => r.kg > 0).sort((a, b) => b.kg - a.kg).slice(0, 2).map((r) => r.activityType);
 }
+
+const findUserRec = (userId, recommendationId) => db.one(
+  'SELECT * FROM "UserRecommendation" WHERE "userId" = $1 AND "recommendationId" = $2',
+  [userId, recommendationId],
+);
 
 const shape = (r, ur, relevant) => ({
   id: r.id, slug: r.slug, activityType: r.activityType, content: r.content, reductionKgPerMonth: r.reductionKgPerMonth,
@@ -19,10 +24,12 @@ const shape = (r, ur, relevant) => ({
 });
 
 async function list(userId, activityType) {
-  const where = activityType && activityType !== 'ALL' ? { activityType } : {};
+  const filtered = activityType && activityType !== 'ALL';
   const [recs, mine, relevant] = await Promise.all([
-    prisma.recommendation.findMany({ where, orderBy: { sortOrder: 'asc' } }),
-    prisma.userRecommendation.findMany({ where: { userId } }),
+    filtered
+      ? db.query('SELECT * FROM "Recommendation" WHERE "activityType" = $1 ORDER BY "sortOrder" ASC', [activityType])
+      : db.query('SELECT * FROM "Recommendation" ORDER BY "sortOrder" ASC'),
+    db.query('SELECT * FROM "UserRecommendation" WHERE "userId" = $1', [userId]),
     relevantTypes(userId),
   ]);
   const byRec = Object.fromEntries(mine.map((m) => [m.recommendationId, m]));
@@ -32,23 +39,22 @@ async function list(userId, activityType) {
 }
 
 async function get(userId, idOrSlug) {
-  const r = await prisma.recommendation.findFirst({ where: { OR: [{ id: idOrSlug }, { slug: idOrSlug }] } });
+  const r = await db.one('SELECT * FROM "Recommendation" WHERE id = $1 OR slug = $1 LIMIT 1', [idOrSlug]);
   if (!r) throw new AppError(404, 'NOT_FOUND', 'Rekomendasi tidak ditemukan');
   const [ur, relevant] = await Promise.all([
-    prisma.userRecommendation.findUnique({ where: { userId_recommendationId: { userId, recommendationId: r.id } } }),
+    findUserRec(userId, r.id),
     relevantTypes(userId),
   ]);
   return shape(r, ur, relevant);
 }
 
 async function setStatus(userId, id, status) {
-  const r = await prisma.recommendation.findUnique({ where: { id } });
+  const r = await db.one('SELECT * FROM "Recommendation" WHERE id = $1', [id]);
   if (!r) throw new AppError(404, 'NOT_FOUND', 'Rekomendasi tidak ditemukan');
-  const key = { userId_recommendationId: { userId, recommendationId: id } };
-  const current = await prisma.userRecommendation.findUnique({ where: key });
+  const current = await findUserRec(userId, id);
   if (status === 'NONE') {
     if (current?.status === 'DONE') throw new AppError(409, 'ALREADY_DONE', 'Aksi yang sudah selesai tidak dapat dibatalkan');
-    if (current) await prisma.userRecommendation.delete({ where: key });
+    if (current) await db.query('DELETE FROM "UserRecommendation" WHERE "userId" = $1 AND "recommendationId" = $2', [userId, id]);
     return { recommendation: await get(userId, id), newlyEarned: [] };
   }
   if (current?.status === 'DONE') throw new AppError(409, 'ALREADY_DONE', 'Aksi ini sudah selesai');
@@ -56,8 +62,19 @@ async function setStatus(userId, id, status) {
     throw new AppError(409, 'MUST_START_FIRST', 'Mulai aksi ini terlebih dahulu sebelum menandai selesai');
   }
   const now = new Date();
-  const data = { status, ...(status === 'IN_PROGRESS' ? { startedAt: now } : {}), ...(status === 'DONE' ? { completedAt: now } : {}) };
-  await prisma.userRecommendation.upsert({ where: key, create: { userId, recommendationId: id, ...data }, update: data });
+  // startedAt is set when the action starts, completedAt when it's done; the other date is left as it was.
+  const startedAt = status === 'IN_PROGRESS' ? now : null;
+  const completedAt = status === 'DONE' ? now : null;
+  await db.query(
+    `INSERT INTO "UserRecommendation" (id, "userId", "recommendationId", status, "startedAt", "completedAt", "updatedAt")
+     VALUES ($1, $2, $3, $4, $5, $6, NOW())
+     ON CONFLICT ("userId", "recommendationId") DO UPDATE
+       SET status = EXCLUDED.status,
+           "startedAt" = COALESCE(EXCLUDED."startedAt", "UserRecommendation"."startedAt"),
+           "completedAt" = COALESCE(EXCLUDED."completedAt", "UserRecommendation"."completedAt"),
+           "updatedAt" = NOW()`,
+    [db.newId(), userId, id, status, startedAt, completedAt],
+  );
   const newlyEarned = status === 'DONE' ? await evaluateAchievements(userId) : [];
   return { recommendation: await get(userId, id), newlyEarned };
 }

@@ -2,7 +2,7 @@
 const { test, describe } = require('node:test');
 const assert = require('node:assert/strict');
 const { calculate } = require('../src/services/calculator/calculator.service');
-const { factors: factorList } = require('../prisma/data/factors');
+const { factors: factorList } = require('../database/data/factors');
 const { todayKey, addDaysKey } = require('../src/utils/time');
 
 const FACTORS = Object.fromEntries(factorList.map((f) => [f.key, f]));
